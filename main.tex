@@ -1,0 +1,325 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs} % For professional tables
+\usepackage[round]{natbib} % For citation commands like \citep, \citet
+\usepackage{url}
+\usepackage[hyphens]{hyperref} % For clickable links, allows hyphens
+\usepackage{geometry}
+\usepackage{caption}
+\usepackage{xcolor} % For comments/todos
+
+% Set margins
+\geometry{a4paper, margin=1in}
+
+% Define a todo command for placeholders
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\placeholder}[1]{\textcolor{blue}{[Placeholder: #1]}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=blue,
+    pdftitle={Learning Interpretable Hierarchies: Recursive Distillation into Neural Decision Tree Routed Mixture of Experts},
+    pdfpagemode=FullScreen,
+}
+
+\title{Learning Interpretable Hierarchies: Recursive Distillation into Neural Decision Tree Routed Mixture of Experts}
+
+\author{
+  Nicholas Cantrell\thanks{For partnership inquiries contact lab@cybergolem.ai} \\
+  CyberGolem AI Research \thanks{Nicholas Cantrell generated this text in part with Gemini 2.5 Pro Preview 03-25, Google's large-scale language-generation model. Upon generating draft language, the author reviewed, edited, and revised the language to their own liking and takes ultimate responsibility for the content of this publication.} \\
+}
+
+\date{} % No date printed
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Large transformer models have achieved remarkable success but largely operate as black boxes, limiting our understanding of their internal reasoning and hierarchical feature learning. This work proposes a novel architecture, the Neural Decision Tree routed Mixture of Experts (NDT-MoE), designed to enhance interpretability and explicitly model hierarchical processing. Our approach utilizes differentiable decision trees (inspired by NDF/NODE) as interpretable routing mechanisms within an MoE framework, guiding inputs to specialized expert subnetworks. To overcome training complexities, we employ knowledge distillation, transferring knowledge from a pre-trained large transformer (teacher) to the NDT-MoE student. We further explore stacking these NDT-MoE layers, potentially enabling recursive analysis of routing decisions. We design experiments on tabular benchmarks known to favor tree-based methods, standard interpretability benchmarks, and complex synthetic datasets generated from differential equations. Evaluation focuses on task performance compared to baseline transformers and MoE models, alongside qualitative and quantitative analysis of routing interpretability, expert specialization, and hierarchical feature representation. \placeholder{Our results indicate that NDT-MoE achieves competitive performance on tabular and synthetic tasks while providing tangible insights into the model's decision-making process through routing analysis.} We believe this architecture offers a promising direction towards building more transparent and structured large-scale models.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+The phenomenal capabilities of large language models (LLMs) and other transformer-based architectures are undeniable \citep{vaswani2017attention, brown2020language}. However, their monolithic, densely connected nature renders them opaque "black boxes." Understanding *how* these models arrive at their predictions and *whether* they learn meaningful hierarchical representations of data remains a significant challenge. This lack of interpretability hinders trust, debugging, and the ability to verify alignment with desired principles.
+
+Current approaches to understanding these models often rely on *post-hoc* analysis techniques like attention visualization or feature attribution \citep{lundberg2017unified, ribeiro2016why}, which provide limited glimpses into complex internal dynamics. Model compression via knowledge distillation (KD) \citep{hinton2015distilling} primarily focuses on efficiency, typically creating smaller black-box students. While Mixture of Experts (MoE) architectures \citep{shazeer2017outrageously, fedus2022switch} improve efficiency through sparse computation, their standard gating networks offer little inherent interpretability.
+
+We propose a novel approach that integrates interpretability directly into the architecture: the Neural Decision Tree routed Mixture of Experts (NDT-MoE). Inspired by the success of differentiable decision trees/forests \citep{kontschieder2015deep} and Neural Oblivious Decision Ensembles (NODE) \citep{popov2019neural} in providing interpretable yet powerful models (especially for tabular data), we employ them as the *routing mechanism* within an MoE layer. Instead of a dense gate, an NDT routes inputs to different expert subnetworks based on learned, potentially sparse and hierarchical, criteria.
+
+Training such an architecture from scratch is challenging. We leverage knowledge distillation from a pre-trained large transformer model to guide the NDT-MoE student, transferring rich semantic knowledge and stabilizing training. Furthermore, by stacking NDT-MoE layers, possibly with DenseNet-style connections \citep{huang2017densely} inspired by NODE, we aim to facilitate the learning of hierarchical features, where routing decisions at deeper layers operate on representations refined by earlier expert processing. The potential for *recursive interpretation* arises – analyzing routing decisions at layer $l$ based on the outputs and routing from layers $< l$.
+
+Our main contributions are:
+\begin{itemize}
+    \item A novel NDT-MoE architecture using differentiable decision trees for interpretable routing in MoE models.
+    \item A training methodology using knowledge distillation from large transformers to train the NDT-MoE student.
+    \item A design for analyzing the interpretability of routing decisions and the potential emergence of hierarchical expert specialization.
+    \item An experimental framework comparing NDT-MoE against relevant baselines on diverse datasets, including synthetic data with known generative processes. \placeholder{Highlight key experimental finding here.}
+\end{itemize}
+
+This paper proceeds as follows: Section~\ref{sec:related_work} reviews related work. Section~\ref{sec:methodology} details the NDT-MoE architecture and training. Section~\ref{sec:experimental_design} outlines the experimental design. Section~\ref{sec:results} presents \placeholder{results} and analysis. Section~\ref{sec:discussion} discusses limitations and future work, and Section~\ref{sec:conclusion} concludes.
+
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Mixture of Experts (MoE)}
+MoE models, originating from \citep{jacobs1991adaptive}, aim to increase model capacity without proportional computational cost by activating only a subset of "expert" subnetworks for each input. Modern implementations \citep{shazeer2017outrageously, fedus2022switch} employ sparse gating networks, often simple linear layers followed by softmax and a Top-K selection, to route tokens to experts (typically Feed-Forward Networks, FFNs). While effective for scaling, these dense gates lack transparency. Load balancing, ensuring experts receive comparable computational load, is a key challenge addressed by auxiliary losses \citep{shazeer2017outrageously}. Alternative routing mechanisms like Expert Choice \citep{zhou2022mixture} have also been proposed. Our work replaces the standard dense gate with an interpretable NDT structure.
+
+\subsection{Differentiable Decision Trees and Forests}
+Classical decision trees are highly interpretable but traditionally not trained end-to-end within deep learning frameworks. Recent work has focused on creating differentiable versions. Deep Neural Decision Forests (NDF) \citep{kontschieder2015deep} introduced differentiable routing functions and leaf predictions, enabling end-to-end training. Neural Oblivious Decision Ensembles (NODE) \citep{popov2019neural} generalized ensembles of oblivious decision trees (decision tables) with differentiable feature selection and splitting, showing strong performance on tabular data. Techniques like the Gumbel-Softmax/Concrete distribution \citep{jang2017categorical, maddison2017concrete} or entmax \citep{peters2019sparse} provide crucial mechanisms for allowing gradient flow through discrete choices or learning sparse selections, which are essential for differentiable tree splits and feature selection. We leverage these concepts to build our routing mechanism.
+
+\subsection{Knowledge Distillation (KD)}
+KD \citep{hinton2015distilling} is a widely used technique for model compression, where a smaller "student" model is trained to mimic the outputs (logits) of a larger, pre-trained "teacher" model. Variations involve matching intermediate hidden states \citep{romero2015fitnets} or attention patterns \citep{zagoruyko2017paying}. While typically used to create efficient black-box students, we employ KD primarily to guide the training of our structurally different and potentially more interpretable NDT-MoE student, transferring knowledge from a powerful transformer teacher.
+
+\subsection{Interpretability and Explainable AI (XAI)}
+The field of XAI seeks to make complex models understandable. Many techniques are *post-hoc*, such as analyzing attention weights \citep{jain2019attention} (often debated for interpretability), using proxy models (LIME, \citep{ribeiro2016why}), or computing feature attributions (SHAP, \citep{lundberg2017unified}). While useful, these methods provide external explanations rather than revealing the model's inherent logic. Our work pursues *intrinsic interpretability* by designing an architecture whose components (NDT routers) are intended to be directly interpretable.
+
+\subsection{Hierarchical Models}
+Learning hierarchical representations is considered crucial for complex tasks. Architectures like Convolutional Neural Networks (CNNs) implicitly learn feature hierarchies. More explicit attempts include Capsule Networks \citep{sabour2017dynamic} and various structured models. Our use of stacked NDT-MoE layers with potential DenseNet-style connections aims to explicitly encourage hierarchical processing through layered, specialized expert computations guided by interpretable routing.
+
+\section{Methodology: NDT-MoE Architecture and Training}
+\label{sec:methodology}
+
+\subsection{Overall Framework}
+We utilize a teacher-student knowledge distillation (KD) setup. The teacher model $T$ is a pre-trained large transformer \placeholder{e.g., Qwen2-0.5B-Instruct}. The student model $S$ is our NDT-MoE architecture, trained to mimic $T$ while incorporating interpretable structures.
+
+\subsection{NDT Routing Mechanism}
+We adapt the NODE \citep{popov2019neural} architecture based on Oblivious Decision Trees (ODTs) for routing. An ODT uses the same feature and threshold for all nodes at a given depth level.
+Given an input representation $x \in \mathbb{R}^{d_{in}}$ (e.g., token embedding or previous layer output):
+\begin{enumerate}
+    \item \textbf{Feature Selection:} For each tree level $i=1...depth$, learnable feature selection weights $F_i \in \mathbb{R}^{d_{in}}$ are used with $\alpha$-entmax \citep{peters2019sparse} to compute a sparse combination of input features: $f_i(x) = \sum_{j=1}^{d_{in}} x_j \cdot \text{entmax}_{\alpha}(F_i)_j$.
+    \item \textbf{Splitting Decision:} The selected feature combination $f_i(x)$ is compared to a learnable threshold $b_i$ using a smoothed, differentiable step function, also based on $\alpha$-entmax. Let $c_i(x) = \text{entmax}_{\alpha}( [(f_i(x) - b_i)/\tau_i, 0] )_0$, where $\tau_i$ is a learnable temperature/scale parameter. $c_i(x)$ approximates $\mathbb{I}(f_i(x) > b_i)$.
+    \item \textbf{Path/Leaf Probability:} The probability of reaching a specific leaf node (representing a path through the tree) is calculated by multiplying the probabilities of taking the corresponding left/right splits at each level: $P(\text{leaf}_k | x) \propto \prod_{i=1}^{depth} [c_i(x) \text{ or } (1-c_i(x))]$. This can be efficiently computed via outer products, forming a "choice tensor" $C(x) \in \mathbb{R}^{2^{depth}}$ \citep{popov2019neural}.
+    \item \textbf{Expert Assignment:} The leaf probabilities $C(x)$ are mapped to probabilities over the $N$ experts using a linear layer followed by softmax: $p(x) = \text{Softmax}(\text{Linear}(C(x))) \in \mathbb{R}^N$. Alternatively, Top-K selection can be applied based on $p(x)$.
+\end{enumerate}
+The NDT router function $p = \text{NDT}(x)$ outputs the expert probability distribution.
+
+\subsection{MoE Layer Structure}
+The NDT-MoE layer operates as follows:
+\begin{enumerate}
+    \item Compute expert probabilities $p = \text{NDT}(x)$.
+    \item Select the Top-K experts based on $p$, forming the active set $S$.
+    \item Compute outputs for active experts: $o_i = \text{Expert}_i(x)$ for $i \in S$. Experts ($\text{Expert}_i$) are typically FFNs or small transformer blocks.
+    \item Combine expert outputs, weighted by router probabilities: $y = \sum_{i \in S} p_i \cdot o_i$. (Normalization of $p_i$ over $S$ might be needed).
+    \item Add a load balancing loss $L_{\text{load}} = w_{\text{load}} \cdot \text{CV}(\text{Importance})^2$ to the total loss, where $\text{Importance}_i = \sum_{\text{batch}} p(x)_i$ and CV is the coefficient of variation \citep{shazeer2017outrageously}. $w_{\text{load}}$ is a hyperparameter.
+\end{enumerate}
+
+\subsection{Multi-Layer / Recursive Structure}
+We stack $L$ NDT-MoE layers. Following NODE \citep{popov2019neural} and DenseNet \citep{huang2017densely}, we use dense connections: the input to the router and experts at layer $l$ is derived from the concatenation of the initial embedding $h_0$ and outputs of all preceding layers $h_1, ..., h_{l-1}$.
+The final model prediction is typically an aggregation (e.g., average or linear combination) of the outputs $h_l$ from all layers. This structure allows deeper layers to build upon features computed by shallower layers and potentially enables recursive interpretation.
+
+\subsection{Knowledge Distillation Training}
+We employ a distillation setup similar to that in the provided `run_glue_fnet_distill.py`. A custom `Trainer` subclass (like `DistillationTrainer`) overrides the `compute_loss` method.
+Let $S(x)$ be the student's logits and $T(x)$ be the teacher's logits for input $x$. Let $y_{\text{true}}$ be the ground truth label.
+The total loss is:
+\begin{equation}
+    L = \alpha L_{\text{hard}}(S(x), y_{\text{true}}) + (1 - \alpha) L_{\text{distill}}(S(x), T(x)) + \delta L_{\text{load}} + \gamma L_{\text{inter}}
+    \label{eq:total_loss}
+\end{equation}
+where:
+\begin{itemize}
+    \item $L_{\text{hard}}$ is the standard task loss (e.g., CrossEntropy or MSE).
+    \item $L_{\text{distill}}$ is the KL divergence loss between softened predictions:
+    \begin{equation}
+        L_{\text{distill}} = T^2 \cdot \text{KLDiv}(\text{LogSoftmax}(S(x)/T), \text{Softmax}(T(x)/T))
+        \label{eq:distill_loss}
+    \end{equation}
+    with temperature $T$.
+    \item $L_{\text{load}}$ is the load balancing loss.
+    \item $L_{\text{inter}}$ (optional) is a loss (e.g., MSE) matching intermediate hidden states between teacher and student.
+    \item $\alpha, \delta, \gamma$ are loss weighting hyperparameters.
+\end{itemize}
+The teacher model $T$ is kept frozen and in evaluation mode during training.
+
+\section{Experimental Design}
+\label{sec:experimental_design}
+
+\subsection{Baselines}
+We compare our NDT-MoE student against:
+\begin{itemize}
+    \item \textbf{Teacher Model:} The pre-trained transformer used for distillation (\placeholder{e.g., Qwen2-0.5B-Instruct}).
+    \item \textbf{Distilled Dense Transformer:} A standard transformer student with comparable parameters/FLOPs, trained with the same KD setup (excluding $L_{\text{load}}$).
+    \item \textbf{Distilled Dense-Gate MoE:} An MoE student with a standard linear gate, trained with the same KD setup (including $L_{\text{load}}$) and comparable parameters/FLOPs.
+    \item \textbf{Distilled FNet:} An FNet student \citep{leethorp2021fnet} trained with the same KD setup, serving as a non-attention baseline.
+    \item \textbf{[Optional] Original NODE/NDF:} Performance reported in original papers \citep{popov2019neural, kontschieder2015deep} or re-implemented on relevant tabular tasks.
+\end{itemize}
+
+\subsection{Datasets}
+\begin{itemize}
+    \item \textbf{Tabular Benchmarks (from \citep{popov2019neural}):} Epsilon, YearPredictionMSE, Higgs, Microsoft LETOR, Yahoo LETOR, Click. (Metrics: Classification Error, MSE).
+    \item \textbf{Interpretability Benchmarks:}
+        \begin{itemize}
+            \item UCI Adult/Census Income: Binary classification (Accuracy, F1). Analyze routing based on demographic vs. financial features.
+            \item SST-2 (GLUE): Binary sentiment classification (Accuracy). Analyze routing based on syntactic vs. semantic cues.
+        \end{itemize}
+    \item \textbf{Synthetic Complex Data:}
+        \begin{itemize}
+            \item Lorenz Attractor: Regression (predict next state, MSE). Analyze expert specialization w.r.t. attractor lobes.
+            \item Lotka-Volterra (Predator-Prey): Regression (predict next state, MSE). Analyze expert specialization w.r.t. population cycles.
+        \end{itemize}
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+\begin{itemize}
+    \item \textbf{Performance:} Task-specific metrics (Accuracy, F1, MSE, etc.).
+    \item \textbf{Interpretability:}
+        \begin{itemize}
+            \item \textit{Routing Feature Importance:} Permutation importance or integrated gradients on NDT router inputs.
+            \item \textit{Routing Path Visualization:} Trace decision paths for sample inputs.
+            \item \textit{Expert Utilization Analysis:} Frequency, variance, load balancing factor (max/avg load). Cluster inputs and analyze expert assignment purity per cluster. Correlate expert usage with known states in synthetic data.
+            \item \textit{Hierarchical Analysis:} Compare feature importance and expert patterns across different layers.
+        \end{itemize}
+    \item \textbf{Computational:} Parameter Count, Training/Inference FLOPs (sparse), Inference Latency, Load Balancing Factor.
+\end{itemize}
+
+\subsection{Implementation Details}
+\begin{itemize}
+    \item \textbf{Framework:} PyTorch, `transformers`, `datasets`, `evaluate`.
+    \item \textbf{Teacher Model:} \placeholder{Specify Model, e.g., Qwen/Qwen2-0.5B-Instruct}.
+    \item \textbf{Student Architecture:} NDT type (NODE-style Oblivious), depth (\placeholder{e.g., 6}), layers (\placeholder{e.g., 4}), experts/layer (\placeholder{e.g., 8}), expert type (\placeholder{e.g., 2-layer FFN}), DenseNet connections (Yes).
+    \item \textbf{Training:} Use `DistillationTrainer`. Optimizer (AdamW), LR schedule (\placeholder{Linear warmup + decay}), batch size (\placeholder{e.g., 32}), KD temp $T$ (\placeholder{e.g., 2.0}), loss weights $\alpha$ (\placeholder{e.g., 0.1}), $\delta$ (\placeholder{e.g., 0.01}), $\gamma$ (0 if not used). NDT $\alpha$ for entmax (\placeholder{e.g., 1.5}). Use `load_best_model_at_end=True` with appropriate `metric_for_best_model`.
+    \item \textbf{Hardware:} \placeholder{Specify GPUs, e.g., 4 x NVIDIA A100}.
+\end{itemize}
+
+\section{Results and Analysis}
+\label{sec:results}
+\todo{This section will be populated with experimental results.}
+
+\subsection{Task Performance}
+\placeholder{Present Table~\ref{tab:results_main} comparing performance metrics across datasets and models. Discuss key performance differences and trade-offs.}
+\begin{table}[h!]
+    \centering
+    \caption{Performance comparison on benchmark datasets. Values are \placeholder{Accuracy/MSE/Error Rate}. Best student performance in bold.}
+    \label{tab:results_main}
+    \begin{tabular}{lccccc}
+        \toprule
+        Dataset & Teacher & Distilled Dense & Distilled FNet & Distilled Dense-MoE & NDT-MoE (Ours) \\
+        \midrule
+        Epsilon & \placeholder{N/A} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        YearPred & \placeholder{N/A} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        Higgs & \placeholder{N/A} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        Adult & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        SST-2 & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        Lorenz & \placeholder{N/A} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        Lotka-Volterra & \placeholder{N/A} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{\textbf{Val}} \\
+        \bottomrule
+    \end{tabular}
+    \placeholder{Add notes about metrics used for each dataset.}
+\end{table}
+
+\subsection{Interpretability Analysis}
+\placeholder{Present qualitative and quantitative interpretability results.}
+\begin{itemize}
+    \item \textbf{Routing Decisions:} \placeholder{Show Figure~\ref{fig:routing_viz} with routing path examples. Discuss feature importance results (Table~\ref{tab:feature_importance}). Did the routers use meaningful features?}
+    \item \textbf{Expert Specialization:} \placeholder{Show analysis of expert utilization (e.g., Figure~\ref{fig:expert_specialization}). Did experts specialize? How did this relate to input clusters or states in synthetic data?}
+    \item \textbf{Hierarchy:} \placeholder{Discuss findings from analyzing multi-layer models. Was there evidence of hierarchical feature processing?}
+\end{itemize}
+
+% Placeholder figures and tables
+\begin{figure}[h!]
+    \centering
+    \placeholder{\includegraphics[width=0.8\textwidth]{placeholder_routing_viz.png}}
+    \caption{Examples of NDT routing paths for selected inputs from \placeholder{Dataset Name}. Highlighted nodes indicate decisions based on specific features.}
+    \label{fig:routing_viz}
+\end{figure}
+
+\begin{table}[h!]
+    \centering
+    \caption{Aggregated feature importance scores for NDT routers across datasets.}
+    \label{tab:feature_importance}
+    \begin{tabular}{lc}
+        \toprule
+        Feature/Feature Type & Aggregated Importance Score \\
+        \midrule
+        \placeholder{Feature 1} & \placeholder{Score} \\
+        \placeholder{Feature Type A} & \placeholder{Score} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[h!]
+    \centering
+    \placeholder{\includegraphics[width=0.8\textwidth]{placeholder_expert_spec.png}}
+    \caption{Analysis of expert specialization. Left: Expert utilization frequencies. Right: Visualization of input clusters (colors) and dominant expert assignments within clusters.}
+    \label{fig:expert_specialization}
+\end{figure}
+
+\subsection{Computational Efficiency and Load Balancing}
+\placeholder{Present Table~\ref{tab:computation} comparing computational metrics. Discuss the efficiency gains/losses and the effectiveness of load balancing.}
+\begin{table}[h!]
+    \centering
+    \caption{Computational comparison: Parameters, Inference FLOPs (Sparse), Latency, Load Balancing Factor.}
+    \label{tab:computation}
+    \begin{tabular}{lcccc}
+        \toprule
+        Model & Params & FLOPs & Latency (ms) & Load Factor \\
+        \midrule
+        Distilled Dense & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & N/A \\
+        Distilled FNet & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & N/A \\
+        Distilled Dense-MoE & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} \\
+        NDT-MoE (Ours) & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} & \placeholder{Val} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Ablation Studies}
+\placeholder{Present results from ablation studies (e.g., Table~\ref{tab:ablation}) investigating the impact of NDT depth, number of experts, loss components, etc.}
+\begin{table}[h!]
+    \centering
+    \caption{Ablation study results on \placeholder{Dataset Name} (\placeholder{Metric}).}
+    \label{tab:ablation}
+    \begin{tabular}{lc}
+        \toprule
+        Configuration & Performance \\
+        \midrule
+        Full Model & \placeholder{Val} \\
+        - No Distillation ($\alpha=1$) & \placeholder{Val} \\
+        - No Load Balancing ($\delta=0$) & \placeholder{Val} \\
+        - NDT Depth = \placeholder{D-1} & \placeholder{Val} \\
+        - Experts = \placeholder{N/2} & \placeholder{Val} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Discussion and Future Work}
+\label{sec:discussion}
+\placeholder{Discuss the significance of the findings. Did NDT-MoE offer meaningful interpretability advantages compared to baselines? Was there a clear performance trade-off? Did the hierarchical structure show promise? Discuss the effectiveness of KD for this novel architecture.}
+
+\textbf{Limitations:} \placeholder{Acknowledge challenges like training stability, complexity of interpreting deep NDTs, scalability concerns, the effectiveness of load balancing compared to dense gates, reliance on a good teacher model.}
+
+\textbf{Future Work:} \placeholder{Suggest extensions: exploring different NDT variants (non-oblivious), developing adaptive temperature/sparsity for routers, creating better visualization tools for hierarchical routing, applying to other domains (vision, reinforcement learning), investigating self-supervised pre-training for NDT-MoE.}
+
+\section{Conclusion}
+\label{sec:conclusion}
+The opacity of large transformer models remains a significant barrier. We introduced the NDT-MoE architecture, leveraging differentiable decision trees for interpretable routing within a Mixture of Experts framework, trained via knowledge distillation. Our experiments on tabular, interpretability, and synthetic datasets \placeholder{demonstrated [key finding, e.g., the model's potential to provide insights into decision-making paths and expert specialization while maintaining competitive performance].} The NDT-MoE offers a promising, albeit complex, direction towards building large-scale models that are not only powerful but also more transparent and structurally aligned with hierarchical reasoning.
+
+\section*{Acknowledgements}
+\placeholder{Acknowledge funding sources, helpful discussions, computational resources, etc.}
+
+\bibliographystyle{plainnat} % Use a style that supports \citep, \citet
+\bibliography{references} % Your .bib file name should be references.bib
+
+\appendix
+\section{Appendix}
+
+\subsection{Hyperparameter Details}
+\label{app:hyperparams}
+\placeholder{Provide detailed tables of hyperparameters used for NDT-MoE and baseline training for each dataset.}
+
+\subsection{Dataset Details}
+\label{app:datasets}
+\placeholder{Provide further details on dataset preprocessing, generation specifics for synthetic data, and splits used.}
+
+\subsection{Additional Visualizations and Results}
+\label{app:extra_results}
+\placeholder{Include more routing path examples, expert specialization plots across different datasets/layers, detailed feature importance breakdowns, learning curves, etc.}
+
+\end{document}
